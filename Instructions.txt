@@ -163,7 +163,8 @@ Columns NOT sent to DemOn (your data only):
   fecalSample, pittagNo, pitType, comment, nestlingAge, fatMusc,
   NEEDS UPLOADING TO DEMON?, ERRORS FOUND
 
-
+Columns can be reordered, and new ones inserted, but current script depends on the following column names: 
+location, date, species, ringNo, ringType, age, sex, sexingMethod, wing, weight, time, initials, pittagNo, pitType, comment, NESTBOX, featherLength, broodSize, NEEDS UPLOADING TO DEMON?, ERRORS FOUND
 --------------------------------------------------------------------------------
 LOCATION CODE CONVERSION TABLE
 --------------------------------------------------------------------------------
