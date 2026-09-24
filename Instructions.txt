@@ -1,0 +1,357 @@
+================================================================================
+  FIELDEMON
+  Field data to DemOn — Davidson Group Ringing Data Upload System
+================================================================================
+
+GitHub repo: fieldemon
+BTO bulk upload guidance: see bulk_upload_guidance.pdf
+
+--------------------------------------------------------------------------------
+WHAT THIS IS
+--------------------------------------------------------------------------------
+
+Fieldemon is a Python script that takes the Davidson group ringing data
+spreadsheet and automatically generates three tabs:
+
+  - Errors                — flags records needing attention before upload
+  - Outstanding Comments  — records with comments that may need adding to DemOn
+  - DemOn Upload          — cleaned, correctly formatted data ready to export
+                            as CSV for the BTO DemOn bulk upload tool
+
+The script reads from the 'Ringing data' sheet and never modifies it.
+
+
+--------------------------------------------------------------------------------
+REPO STRUCTURE
+--------------------------------------------------------------------------------
+
+fieldemon/
+├── build_demon_tabs.py        ← the main script
+├── README.md                   ← public-repository quick start
+├── FIELD_DEMON_CONVERSION_README.txt  ← this detailed guide
+├── requirements.txt            ← Python dependency list
+├── input/                      ← local source workbooks (git-ignored)
+├── output/                     ← local generated files (git-ignored)
+└── .gitignore                  ← excludes data and local environment files
+
+
+--------------------------------------------------------------------------------
+.GITIGNORE
+--------------------------------------------------------------------------------
+
+Your spreadsheet files contain personal/sensitive ringing data and should
+never be committed to the repo. Your .gitignore should include:
+
+  *.xlsx
+  *.xls
+  *.csv
+  *.xlsm
+  __pycache__/
+  *.pyc
+  .venv/
+  .DS_Store
+
+The repository uses `input/` and `output/` folders so data never sits next
+to source code. Those folders contain a tracked `.gitkeep` placeholder only;
+all workbook and CSV contents remain ignored.
+
+
+--------------------------------------------------------------------------------
+REQUIREMENTS
+--------------------------------------------------------------------------------
+
+Python 3.x with the following packages:
+  pip install openpyxl
+
+That's it — no other dependencies.
+
+
+--------------------------------------------------------------------------------
+HOW TO RUN THE SCRIPT
+--------------------------------------------------------------------------------
+
+1. Place exactly one `.xlsx` ringing data spreadsheet in the `input/` folder.
+  Its filename can be anything.
+
+2. The script automatically reads that workbook from `input/` and writes a
+  timestamped workbook to `output/` in this format:
+
+  output/Davidson_group_ringing_data_withDemonTabs_YYYY-MM-DD-HH-MM-SS.xlsx
+
+  For example:
+
+  output/Davidson_group_ringing_data_withDemonTabs_2026-09-24-14-30-05.xlsx
+
+  The script stops with an error if `input/` is empty or contains more than
+  one `.xlsx` workbook.
+
+3. Run the script:
+
+     python build_demon_tabs.py
+
+4. Open the output file. It will contain all your original sheets plus:
+     - Errors
+     - Outstanding Comments
+     - DemOn Upload
+
+  If manual corrections are needed, edit the source workbook, replace the
+  single workbook in `input/`, and run the script again. Each run creates a
+  new timestamped output workbook.
+
+
+--------------------------------------------------------------------------------
+HOW TO EXPORT FOR DemOn UPLOAD
+--------------------------------------------------------------------------------
+
+1. Go to the 'DemOn Upload' tab in the output file.
+2. Delete the 'SOURCE_ROW' column (last column, highlighted in brown).
+   This is a helper column only — it is NOT a valid DemOn column.
+3. File > Save As > CSV (Comma delimited).
+4. Log in to DemOn > Enter Data > Ringing > Bulk Upload.
+5. Upload the CSV file.
+
+IMPORTANT: DemOn limit is 500 records per file. If more than 500 rows are
+marked Y for upload, split into multiple CSV files before uploading.
+
+
+--------------------------------------------------------------------------------
+WHICH ROWS ARE INCLUDED IN DemOn Upload
+--------------------------------------------------------------------------------
+
+A row is included ONLY if:
+  - 'NEEDS UPLOADING TO DEMON?' = Y    AND
+  - ringType is NOT one of: X, NOTRINGED, LOST, OVERLAPPED REMOVED
+
+Excluded ringType values are flagged on the Errors tab for manual review.
+
+
+--------------------------------------------------------------------------------
+COLUMN MAPPING: YOUR COLUMNS → DemOn COLUMNS
+--------------------------------------------------------------------------------
+
+Your column        DemOn column(s)          Notes
+────────────────   ──────────────────────   ──────────────────────────────────
+location           LOCATION_CODE            Converted via lookup table (below)
+                   HABITAT_1                Derived from location (below)
+NESTBOX            LOCATION_CODE            Overrides location when populated.
+                                            Nestbox codes (e.g. UC42, UW17)
+                                            are passed through as-is — they
+                                            ARE the DemOn location codes.
+                                            HABITAT_1 still comes from the
+                                            location column.
+date               VISIT_DATE               Reformatted to dd/mm/yyyy
+                   DATE_MEASURED            Same value as VISIT_DATE
+time               CAPTURE_TIME             Reformatted to HH:MM (24hr)
+                   TIME_MEASURED            Same value as CAPTURE_TIME
+species            SPECIES                  Direct (BTO 5-letter codes)
+ringNo             RING_NO                  Direct
+age                AGE                      Direct
+sex                SEX                      Blank if sexingMethod = G
+sex                PROVISIONAL_SEX          Only populated if sexingMethod = G
+sexingMethod       SEXING_METHOD            Blank if G; otherwise direct
+wing               WING_LENGTH              Direct
+weight             WEIGHT                   Direct
+broodSize          PULLI_ALIVE              Direct (nestbox records only)
+featherLength      PULLUS_STAGE             Converted (see below)
+initials           RINGER_INITIALS          Same value used for both
+                   PROCESSOR_INITIALS
+pittagNo           (triggers record type    Presence of a pit tag changes
+                    and WARNING columns)    RECORD_TYPE, CONDITION and
+                                            WARNING columns (see below)
+
+Columns NOT sent to DemOn (your data only):
+  fecalSample, pittagNo, pitType, comment, nestlingAge, fatMusc,
+  NEEDS UPLOADING TO DEMON?, ERRORS FOUND
+
+
+--------------------------------------------------------------------------------
+LOCATION CODE CONVERSION TABLE
+--------------------------------------------------------------------------------
+
+Your value              DemOn LOCATION_CODE    HABITAT_1
+──────────────────────  ─────────────────────  ─────────
+rabbitEnclosure         RABBIT-UEA             A3
+blackdalePlantation     UEA-BD                 A1
+greenhouse              UEA-GREEN              A3
+newWoods                UEA-COL-LN-WOOD        A3
+universityCampus        MAIN-UEA               F1
+earlhamHall             EARL-UEA               A1
+universityWoods         UEA-NESTBOXES          A1
+UEAWoods                UEA-NESTBOXES          A1  (treated as same site)
+charterWoods            Carter Wood            A1
+
+Nestbox HABITAT_1 exceptions:
+  NW8, NW9, NW15  →  C5  (all other nestboxes use their location's habitat)
+
+TO ADD A NEW SITE: In build_demon_tabs.py, find the LOCATION_MAP dictionary
+and add a new entry following this pattern:
+
+  'yourlocationname': ('DEMON-LOCATION-CODE', 'X0'),
+
+The key must be lowercase. The value is a tuple of (DemOn code, HABITAT_1).
+Then re-run the script.
+
+Any location not found in the lookup table is passed through as-is AND
+flagged on the Errors tab: "Unknown location — check DemOn location code"
+
+TO ADD A NEW NESTBOX C5 EXCEPTION: find the NESTBOX_C5 set in the script
+and add the nestbox code:
+
+  NESTBOX_C5 = {'NW8', 'NW9', 'NW15', 'NW_NEWONE'}
+
+
+--------------------------------------------------------------------------------
+FEATHER LENGTH CONVERSION (PULLUS_STAGE)
+--------------------------------------------------------------------------------
+
+Your value    DemOn PULLUS_STAGE    Meaning
+──────────    ──────────────────    ──────────────
+IP            IP                    In pin
+S             FS                    Feather small
+M             FM                    Feather medium
+L             FL                    Feather large
+(blank)       (blank)               Not applicable / fully grown
+
+Note: DO (down only) is a valid DemOn code but is not currently used in
+your data. Add it to FEATHER_MAP in the script if needed.
+
+
+--------------------------------------------------------------------------------
+RECORD TYPE LOGIC
+--------------------------------------------------------------------------------
+
+Your ringType    Pit tag?    RECORD_TYPE    CONDITION    METAL_MARK_INFO
+──────────────   ────────    ───────────    ─────────    ───────────────
+N (new ring)     No          N              N            N
+N (new ring)     Yes         M              M            N
+R (retrap)       No          S              N            O
+R (retrap)       Yes         I              M            O
+Nestbox (age=1)  N/A         N              N            N
+
+Additional DemOn fields by record type:
+
+  RECORD_TYPE = N (new, no pit tag)
+    FINDING_CONDITION:        blank
+    FINDING_CIRCUMSTANCES:    blank
+    WARNING_FC_SPECIAL_METHOD: blank
+    WARNING_C_SPECIAL_METHOD:  blank
+
+  RECORD_TYPE = M (new, with pit tag)
+    FINDING_CONDITION:         blank
+    FINDING_CIRCUMSTANCES:     blank
+    WARNING_FC_SPECIAL_METHOD: PTL  (pit tag, leg mount)
+    WARNING_C_SPECIAL_METHOD:  blank
+
+  RECORD_TYPE = S (retrap, no pit tag)
+    FINDING_CONDITION:         8   (subsequent capture by ringer)
+    FINDING_CIRCUMSTANCES:     20  (intentionally taken)
+    WARNING_FC_SPECIAL_METHOD: blank
+    WARNING_C_SPECIAL_METHOD:  blank
+
+  RECORD_TYPE = I (retrap, with pit tag)
+    FINDING_CONDITION:         8
+    FINDING_CIRCUMSTANCES:     20
+    WARNING_FC_SPECIAL_METHOD: blank
+    WARNING_C_SPECIAL_METHOD:  PTL  (pit tag, leg mount)
+
+CAPTURE_METHOD rules:
+  - Nestbox records (NESTBOX populated, age=1): N (on nest)
+  - Age codes 1, 5 or 6:                        N (on nest)
+  - All other records:                           M (mist net)
+  ** Review manually for any Potter trap or other non-mist-net captures **
+  ** When a captureMethod column is added to Ringing data, update the  **
+  ** get_record_type_fields() function in the script to read from it.  **
+
+
+--------------------------------------------------------------------------------
+SEXING METHOD CONVERSION
+--------------------------------------------------------------------------------
+
+Your code    What happens in DemOn columns
+──────────   ──────────────────────────────────────────────────────────────
+P            SEX = recorded value, SEXING_METHOD = P, PROVISIONAL_SEX = blank
+B            SEX = recorded value, SEXING_METHOD = B, PROVISIONAL_SEX = blank
+G            SEX = blank, SEXING_METHOD = blank, PROVISIONAL_SEX = sex value
+             (G = "guess" — not valid in DemOn, so sex moves to PROVISIONAL_SEX)
+
+
+--------------------------------------------------------------------------------
+RINGTYPES EXCLUDED FROM DemOn UPLOAD
+--------------------------------------------------------------------------------
+
+These are flagged on the Errors tab and excluded from the DemOn Upload tab:
+
+  X                   mortality record. Likely RECORD_TYPE = C 
+                      but needs manual coding. See DemOn guidance
+                      section "Valid combinations of Record Type".
+  NOTRINGED           no ring present. Cannot upload without ring number
+                      unless RECORD_TYPE = F (field observation).
+  LOST                ring lost. Handle via DemOn Ring Administration screen,
+                      not via encounter record upload.
+  OVERLAPPED REMOVED  special case, review manually.
+
+
+--------------------------------------------------------------------------------
+ERRORS TAB — WHAT IS FLAGGED
+--------------------------------------------------------------------------------
+
+Issue type                   What it means
+────────────────────────     ──────────────────────────────────────────────
+Excluded from upload         ringType is X, NOTRINGED, LOST or OVERLAPPED
+                             REMOVED — needs manual review
+Known error recorded         ERRORS FOUND column has a note — resolve first
+Missing [field]              A mandatory DemOn field is blank
+Location code issue          Location not in lookup table, or blank/invalid
+Outdated nestbox code        UW2U detected — verify current DemOn code
+Cannot determine record type ringType could not be mapped to a DemOn type
+Batch size warning           More than 500 records marked Y — split before upload
+
+The 'Ringing data row number' column corresponds exactly to the row number
+in the 'Ringing data' sheet (including the header row as row 1).
+
+
+--------------------------------------------------------------------------------
+OUTSTANDING COMMENTS TAB
+--------------------------------------------------------------------------------
+
+Any row marked Y for upload that has a value in the 'comment' column is
+listed here. Comments are your own notes and are NOT sent to DemOn.
+Review each one to check if the information needs adding to DemOn separately.
+
+Common comment values:
+  EN0, EN1, EN2...  = Egg number (unhatched eggs) — your data only, not DemOn
+  OGC details       = Old Greater Coverts — may need its own DemOn column
+                      (future improvement, see below)
+
+
+--------------------------------------------------------------------------------
+SOURCE_ROW COLUMN
+--------------------------------------------------------------------------------
+
+The last column in the DemOn Upload tab is SOURCE_ROW. This shows the
+row number in your Ringing data sheet so you can trace any uploaded record
+back to the original. DELETE THIS COLUMN before saving as CSV for DemOn.
+
+
+--------------------------------------------------------------------------------
+KNOWN LIMITATIONS / FUTURE IMPROVEMENTS
+--------------------------------------------------------------------------------
+
+1. CAPTURE_METHOD: currently hardcoded to M (mist net) for non-nestbox
+   records. When a captureMethod column is added to the Ringing data sheet,
+   update get_record_type_fields() in the script to read from it.
+
+2. OGC data: OLD_GREATER_COVERTS is not currently populated. OGC data
+   sometimes appears in the comment column. A future version could parse
+   this into its own column once a consistent format is agreed.
+
+3. DemOn validation (phase 2): age consistency across encounters, sex
+   conflicts, ring size vs species, and other cross-record checks are not
+   yet implemented.
+
+4. Did not fledge the nest records (RECORD_TYPE = P): handled in a separate workflow
+   and not part of this script.
+
+5. Potter trap records: cannot be distinguished automatically yet.
+
+

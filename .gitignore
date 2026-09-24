@@ -1,0 +1,15 @@
+# Sensitive ringing data and generated upload files
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+
+# Local Python environment and generated files
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
