@@ -124,7 +124,8 @@ def get_record_type_fields(row):
     pittag = row[C_PITTAG]
     age = row[C_AGE]
     nestbox = row[C_NESTBOX]
-    has_pit = bool(pittag and str(pittag).strip())
+    pittype = str(row[C_PITTYPE]).strip() if row[C_PITTYPE] else '' 
+    has_pit = bool(pittag and str(pittag).strip()) and pittype == 'N'
 
     # Nestbox pulli
     if nestbox and age == 1:
@@ -497,7 +498,7 @@ for i, row in enumerate(data):
         'FINDING_CIRCUMSTANCES':     rt_fields['FINDING_CIRCUMSTANCES'],
         'WARNING_FC_SPECIAL_METHOD': rt_fields['WARNING_FC_SPECIAL_METHOD'],
         'WARNING_C_SPECIAL_METHOD':  rt_fields['WARNING_C_SPECIAL_METHOD'],
-        'RINGER_INITIALS':           row[C_INITIALS],
+        'RINGER_INITIALS':           row[C_INITIALS] if ringtype == 'N' else '',
         'PROCESSOR_INITIALS':        row[C_INITIALS],
         'PULLUS_STAGE':              pullus_stage,
         'PULLI_ALIVE':               row[C_BROOD],
