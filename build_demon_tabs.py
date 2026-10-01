@@ -1,3 +1,4 @@
+import collections
 import openpyxl
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -60,6 +61,7 @@ C_COMMENT   = col('comment')
 C_NESTBOX   = col('nestbox')
 C_FEATHER   = col('featherLength')
 C_BROOD     = col('broodSize')
+C_LETTERID  = header.index('nestlingLetterID') if 'nestlingLetterID' in header else None
 C_UPLOAD    = col('NEEDS UPLOADING TO DEMON?')
 C_ERRORS    = col('ERRORS FOUND')
 
@@ -76,6 +78,12 @@ LOCATION_MAP = {
     'charterwoods':         ('Carter Wood',        'A1'),
 }
 
+SEXING_METHOD_MAP = {
+    'BP': 'B',
+    'C':  'C',
+    'P':  'P',
+}
+
 NESTBOX_C5 = {'NW8', 'NW9', 'NW15'}
 
 FEATHER_MAP = {
@@ -86,6 +94,7 @@ FEATHER_MAP = {
 }
 
 SKIP_RINGTYPES = {'X', 'NOTRINGED', 'LOST', 'OVERLAPPED REMOVED'}
+SKIP_SPECIES = {'WINTER 2026 PLACEHOLDER', 'LOST', 'OVERLAPPED REMOVED', None}
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 def get_location_and_habitat(row):
@@ -192,12 +201,25 @@ def get_record_type_fields(row):
         return None
 
 
-def format_date(val):
+def format_date(val, row_num):
+    if val is None or val == '':
+        return ''
     if isinstance(val, datetime.datetime):
-        return val.strftime('%d/%m/%Y')
+        return val.date().isoformat()
     if isinstance(val, datetime.date):
-        return val.strftime('%d/%m/%Y')
-    return str(val) if val else ''
+        return val.isoformat()
+    if isinstance(val, str):
+        date_text = val.strip()
+        try:
+            parsed_date = datetime.date.fromisoformat(date_text)
+            if parsed_date.isoformat() == date_text:
+                return parsed_date.isoformat()
+        except ValueError:
+            pass
+    raise ValueError(
+        f'Invalid date in Ringing data row {row_num}: {val!r}. '
+        'Expected YYYY-MM-DD.'
+    )
 
 
 def format_time(val):
@@ -273,7 +295,7 @@ def add_error(data_idx, row, issue_type, details):
         ringing_data_row_num(data_idx),
         row[C_RINGNO],
         row[C_SPECIES],
-        format_date(row[C_DATE]),
+        format_date(row[C_DATE], ringing_data_row_num(data_idx)),
         issue_type,
         details,
     ]
@@ -281,6 +303,85 @@ def add_error(data_idx, row, issue_type, details):
         cell = ws_err.cell(row=err_row, column=c, value=v)
         style_cell(cell)
     err_row += 1
+
+
+def find_ambiguous_nestling_links():
+    if C_LETTERID is None:
+        return {}
+
+    records_by_key = collections.defaultdict(dict)
+    for data_idx, row in enumerate(data):
+        species = row[C_SPECIES]
+        ringno = row[C_RINGNO]
+        ringtype = row[C_RINGTYPE]
+        nestbox = row[C_NESTBOX]
+        letterid = row[C_LETTERID]
+
+        if species in SKIP_SPECIES or not ringno or str(ringtype) in SKIP_RINGTYPES:
+            continue
+        if not nestbox or not letterid:
+            continue
+
+        row_num = ringing_data_row_num(data_idx)
+        date_text = format_date(row[C_DATE], row_num)
+        if not date_text:
+            continue
+
+        key = (nestbox, letterid, int(date_text[:4]))
+        records_by_key[key].setdefault(ringno, {
+            'data_idx': data_idx,
+            'species': species,
+        })
+
+    return {
+        key: records
+        for key, records in records_by_key.items()
+        if len(records) > 1
+    }
+
+
+def find_nestbox_consistency_issues():
+    records_by_key = collections.defaultdict(list)
+    for data_idx, row in enumerate(data):
+        species = row[C_SPECIES]
+        ringtype = row[C_RINGTYPE]
+        nestbox = str(row[C_NESTBOX]).strip() if row[C_NESTBOX] else ''
+
+        if species in SKIP_SPECIES or str(ringtype) in SKIP_RINGTYPES:
+            continue
+        if not nestbox or not species:
+            continue
+
+        row_num = ringing_data_row_num(data_idx)
+        date_text = format_date(row[C_DATE], row_num)
+        if not date_text:
+            continue
+
+        key = (nestbox, int(date_text[:4]))
+        records_by_key[key].append({
+            'data_idx': data_idx,
+            'species_code': str(species).strip(),
+            'date': date_text,
+        })
+
+    issues = {}
+    for key, records in records_by_key.items():
+        species_codes = sorted({record['species_code'] for record in records})
+        dates = sorted({record['date'] for record in records})
+        if len(species_codes) == 1 and len(dates) == 1:
+            continue
+
+        details = []
+        if len(species_codes) > 1:
+            details.append(f'multiple species codes: {", ".join(species_codes)}')
+        if len(dates) > 1:
+            details.append(f'multiple dates: {", ".join(dates)}')
+        issues[key] = {
+            'records': records,
+            'details': f'Nestbox {key[0]}, year {key[1]} has ' + '; '.join(details) + '.',
+        }
+
+    return issues
 
 
 # ── Build Outstanding Comments tab ───────────────────────────────────────────
@@ -315,7 +416,7 @@ def add_comment(data_idx, row, comment):
         ringing_data_row_num(data_idx),
         row[C_RINGNO],
         row[C_SPECIES],
-        format_date(row[C_DATE]),
+        format_date(row[C_DATE], ringing_data_row_num(data_idx)),
         comment,
         'Review comment — check if data needs adding to DemOn (e.g. as OWN column or WARNING column). EN0 = egg number, for your records only.',
     ]
@@ -375,6 +476,30 @@ for i, row in enumerate(data):
     # Comments → Outstanding Comments tab (not Errors)
     if comment and str(comment).strip():
         add_comment(i, row, str(comment).strip())
+
+# Check same-year nestbox entries for inconsistent species codes or dates.
+nestbox_consistency_issues = find_nestbox_consistency_issues()
+for issue in nestbox_consistency_issues.values():
+    for record in issue['records']:
+        data_idx = record['data_idx']
+        add_error(
+            data_idx,
+            data[data_idx],
+            'Nestbox species/date mismatch',
+            issue['details'],
+        )
+
+# Ambiguous nestling links need review before linking pre-ringing records.
+ambiguous_nestling_links = find_ambiguous_nestling_links()
+for (nestbox, letterid, year), records in ambiguous_nestling_links.items():
+    ring_numbers = sorted(records, key=str)
+    details = (
+        f'Nestbox {nestbox}, letter {letterid}, year {year} is linked to multiple '
+        f'ring numbers: {", ".join(str(ring_no) for ring_no in ring_numbers)}.'
+    )
+    for ringno in ring_numbers:
+        data_idx = records[ringno]['data_idx']
+        add_error(data_idx, data[data_idx], 'Ambiguous nestling link', details)
 
 # Batch size warning — insert at top of errors if needed
 if upload_count > 500:
@@ -466,12 +591,12 @@ for i, row in enumerate(data):
     else:
         sex_out = sex_raw
         provisional_sex = ''
-        sexmtd_out = sexmtd_raw
+        sexmtd_out = SEXING_METHOD_MAP.get(sexmtd_raw, sexmtd_raw)
 
     fl_raw = str(row[C_FEATHER]).strip() if row[C_FEATHER] else ''
     pullus_stage = FEATHER_MAP.get(fl_raw, '')
 
-    visit_date = format_date(row[C_DATE])
+    visit_date = format_date(row[C_DATE], ringing_data_row_num(i))
     capture_time = format_time(row[C_TIME])
 
     record = {
@@ -531,3 +656,31 @@ print(f'Saved: {OUT}')
 print(f'Upload rows: {up_row - 2}')
 print(f'Error rows: {err_row - 2}')
 print(f'Comment rows: {com_row - 2}')
+
+if err_row > 2:
+    print('\nErrors to review:')
+    for error in ws_err.iter_rows(min_row=2, values_only=True):
+        if error[4]:
+            print(
+                f'  row {error[0]}: {error[1]} ({error[2]}) - '
+                f'{error[4]}: {error[5]}'
+            )
+
+if ambiguous_nestling_links:
+    print('\nAmbiguous nestling links:')
+    for (nestbox, letterid, year), records in ambiguous_nestling_links.items():
+        for ringno, record in records.items():
+            print(
+                f'  {ringno} ({record["species"]}), nestbox {nestbox}, '
+                f'letter {letterid}, year {year}'
+            )
+
+if nestbox_consistency_issues:
+    print('\nNestbox species/date inconsistencies:')
+    for (nestbox, year), issue in nestbox_consistency_issues.items():
+        for record in issue['records']:
+            print(
+                f'  {data[record["data_idx"]][C_RINGNO]} '
+                f'({record["species_code"]}), nestbox {nestbox}, '
+                f'date {record["date"]}, year {year}'
+            )
