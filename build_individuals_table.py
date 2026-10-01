@@ -84,17 +84,31 @@ C_LETTERID = col('nestlingLetterID')
 C_UPLOAD   = col('NEEDS UPLOADING TO DEMON?')
 
 # ── Helper functions ──────────────────────────────────────────────────────────
+def parse_date(val, row_num):
+    if val is None or val == '':
+        return None
+    if isinstance(val, datetime.datetime):
+        return val.date()
+    if isinstance(val, datetime.date):
+        return val
+    if isinstance(val, str):
+        date_text = val.strip()
+        try:
+            parsed_date = datetime.date.fromisoformat(date_text)
+            if parsed_date.isoformat() == date_text:
+                return parsed_date
+        except ValueError:
+            pass
+    raise ValueError(
+        f'Invalid date in Ringing data row {row_num}: {val!r}. '
+        'Expected YYYY-MM-DD.'
+    )
+
 def get_year(val):
-    if isinstance(val, (datetime.datetime, datetime.date)):
-        return val.year
-    return None
+    return val.year if val else None
 
 def format_date(val):
-    if isinstance(val, datetime.datetime):
-        return val.strftime('%d/%m/%Y')
-    if isinstance(val, datetime.date):
-        return val.strftime('%d/%m/%Y')
-    return str(val) if val else ''
+    return val.isoformat() if val else ''
 
 def estimate_hatch_year(first_date, first_age):
     """
@@ -127,16 +141,17 @@ def estimate_hatch_year(first_date, first_age):
 individuals   = {}   # ring_no → dict
 nestling_link = {}   # (nestbox, letterID, year) → ring_no
 ambiguous_links = set()  # (nestbox, letterID, year) with >1 ring
+nestling_link_records = collections.defaultdict(dict)
 
 for i, row in enumerate(data):
+    row_num  = i + 2  # 1-based index + header row
     species  = row[C_SPECIES]
     ringno   = row[C_RINGNO]
     ringtype = row[C_RINGTYPE]
-    date     = row[C_DATE]
+    date     = parse_date(row[C_DATE], row_num)
     nestbox  = row[C_NESTBOX]
     letterid = row[C_LETTERID]
     year     = get_year(date)
-    row_num  = i + 2  # 1-based index + header row
 
     # Skip placeholder and invalid rows
     if species in SKIP_SPECIES:
@@ -205,6 +220,11 @@ for i, row in enumerate(data):
     # Build nestling link lookup for future pre-ringing rows
     if letterid and nestbox and year:
         key = (nestbox, letterid, year)
+        nestling_link_records[key].setdefault(ringno, {
+            'row_num': row_num,
+            'species': species,
+            'date': date,
+        })
         if key in nestling_link:
             if nestling_link[key] != ringno:
                 ambiguous_links.add(key)
@@ -217,7 +237,7 @@ for i, row in enumerate(data):
 # ── Sort by first seen date then ring number ──────────────────────────────────
 sorted_individuals = sorted(
     individuals.values(),
-    key=lambda x: (x['first_seen'] or datetime.datetime.min, x['ring_no'])
+    key=lambda x: (x['first_seen'] or datetime.date.min, x['ring_no'])
 )
 
 # ── Styles ────────────────────────────────────────────────────────────────────
@@ -227,6 +247,7 @@ FONT_CONFLICT = Font(name='Arial', size=10, color='CC0000')
 FONT_NOTE     = Font(name='Arial', size=9, italic=True, color='666666')
 
 FILL_HEADER   = PatternFill('solid', fgColor='1A5276')
+FILL_ERROR_HEADER = PatternFill('solid', fgColor='8B0000')
 FILL_CONFLICT = PatternFill('solid', fgColor='FADBD8')
 FILL_AMBIG    = PatternFill('solid', fgColor='FEF9E7')
 
@@ -244,6 +265,55 @@ def style_cell(cell, conflict=False, ambig=False):
     cell.fill      = FILL_CONFLICT if conflict else (FILL_AMBIG if ambig else PatternFill())
     cell.alignment = Alignment(vertical='center')
     cell.border    = BORDER
+
+# ── Build Errors tab ─────────────────────────────────────────────────────────
+ERR_COLS = [
+    'Ringing data\nrow number', 'Ring No', 'Species', 'Date', 'Issue type', 'Details',
+]
+
+if 'Errors' in wb.sheetnames:
+    ws_err = wb['Errors']
+    existing_headers = tuple(ws_err.cell(row=1, column=c).value for c in range(1, len(ERR_COLS) + 1))
+    if existing_headers != tuple(ERR_COLS):
+        raise ValueError('Existing Errors sheet has unexpected column headers.')
+else:
+    ws_err = wb.create_sheet('Errors')
+    for c, header_text in enumerate(ERR_COLS, 1):
+        cell = ws_err.cell(row=1, column=c, value=header_text)
+        cell.font = FONT_HEADER
+        cell.fill = FILL_ERROR_HEADER
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = BORDER
+    ws_err.row_dimensions[1].height = 35
+
+for column, width in {'A': 16, 'B': 14, 'C': 12, 'D': 14, 'E': 30, 'F': 65}.items():
+    ws_err.column_dimensions[column].width = width
+
+if ws_err.max_row == 2 and ws_err.cell(row=2, column=1).value == 'No errors found':
+    ws_err.delete_rows(2)
+
+error_row = ws_err.max_row + 1
+for key in sorted(ambiguous_links, key=lambda item: tuple(str(value) for value in item)):
+    nestbox, letterid, year = key
+    records = nestling_link_records[key]
+    ring_numbers = sorted(records, key=str)
+    details = (
+        f'Nestbox {nestbox}, letter {letterid}, year {year} is linked to multiple '
+        f'ring numbers: {", ".join(str(ring_no) for ring_no in ring_numbers)}.'
+    )
+    for ring_no in ring_numbers:
+        record = records[ring_no]
+        values = [
+            record['row_num'], ring_no, record['species'], format_date(record['date']),
+            'Ambiguous nestling link', details,
+        ]
+        for column, value in enumerate(values, 1):
+            cell = ws_err.cell(row=error_row, column=column, value=value)
+            style_cell(cell)
+        error_row += 1
+
+ws_err.freeze_panes = 'A2'
+ws_err.auto_filter.ref = f'A1:F{max(ws_err.max_row, 1)}'
 
 # ── Build Individuals sheet ───────────────────────────────────────────────────
 ws_ind = wb.create_sheet('Individuals')
@@ -337,7 +407,7 @@ note_row = len(sorted_individuals) + 3
 note     = ws_ind.cell(
     row=note_row, column=1,
     value=(
-        f'Generated {datetime.datetime.now().strftime("%d/%m/%Y %H:%M")} '
+        f'Generated {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")} '
         f'from {len(data)} rows in {SRC.name}. '
         f'{len(sorted_individuals)} unique ringed birds. '
         f'Red rows = sex or species conflict. '
