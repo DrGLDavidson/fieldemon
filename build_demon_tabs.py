@@ -28,7 +28,7 @@ OUT = OUTPUT_DIR / (
 wb = load_workbook(SRC)
 
 # Remove existing tabs if re-running
-for name in ['Errors', 'DemOn Upload', 'Outstanding Comments']:
+for name in ['Errors', 'DemOn Upload', 'DemOn Upload 2', 'Outstanding Comments']:
     if name in wb.sheetnames:
         del wb[name]
 
@@ -245,7 +245,6 @@ FILL_PURPLE_HEADER = PatternFill('solid', fgColor='5B2C6F')
 FILL_BLUE_HEADER   = PatternFill('solid', fgColor='1F4E79')
 FILL_ORANGE_HEADER = PatternFill('solid', fgColor='7D3C00')
 FILL_WARN_ROW      = PatternFill('solid', fgColor='FFF2CC')
-FILL_BATCH_WARN    = PatternFill('solid', fgColor='FFE0E0')
 
 thin = Side(style='thin', color='CCCCCC')
 BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -286,8 +285,21 @@ ws_err.column_dimensions['D'].width = 14
 ws_err.column_dimensions['E'].width = 30
 ws_err.column_dimensions['F'].width = 65
 
-err_row = 2
-upload_count = 0
+error_note = ws_err.cell(
+    row=2,
+    column=1,
+    value='NOTE: SOURCE_ROW = row number in "Ringing data" sheet (use to trace records back). '
+          'Delete SOURCE_ROW column before saving as CSV for DemOn upload. '
+          'CAPTURE_METHOD assumes M (mist net) for all non-nestbox/non-pullus records — review Potter trap records manually.',
+)
+error_note.font = Font(name='Arial', size=10, bold=True)
+error_note.fill = FILL_WARN_ROW
+error_note.alignment = Alignment(vertical='center', wrap_text=True)
+error_note.border = BORDER
+ws_err.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
+ws_err.row_dimensions[2].height = 45
+
+err_row = 3
 
 def add_error(data_idx, row, issue_type, details):
     global err_row
@@ -350,6 +362,8 @@ def find_nestbox_consistency_issues():
         if species in SKIP_SPECIES or str(ringtype) in SKIP_RINGTYPES:
             continue
         if not nestbox or not species:
+            continue
+        if row[C_AGE] != 1:
             continue
 
         row_num = ringing_data_row_num(data_idx)
@@ -441,8 +455,6 @@ for i, row in enumerate(data):
     if upload_flag != 'Y':
         continue
 
-    upload_count += 1
-
     # Known errors
     if errors_found:
         add_error(i, row, 'Known error recorded',
@@ -501,33 +513,17 @@ for (nestbox, letterid, year), records in ambiguous_nestling_links.items():
         data_idx = records[ringno]['data_idx']
         add_error(data_idx, data[data_idx], 'Ambiguous nestling link', details)
 
-# Batch size warning — insert at top of errors if needed
-if upload_count > 500:
-    ws_err.insert_rows(2)
-    warn_vals = [
-        '—', '—', '—', '—',
-        'Batch size warning',
-        f'{upload_count} records marked Y — DemOn limit is 500 per file. Split into multiple uploads before exporting.'
-    ]
-    for c, v in enumerate(warn_vals, 1):
-        cell = ws_err.cell(row=2, column=c, value=v)
-        cell.font = Font(name='Arial', bold=True, color='8B0000', size=10)
-        cell.fill = FILL_BATCH_WARN
-        cell.border = BORDER
-
-if err_row == 2:
-    ws_err.cell(row=2, column=1, value='No errors found').font = Font(name='Arial', size=10, italic=True)
+if err_row == 3:
+    ws_err.cell(row=3, column=1, value='No errors found').font = Font(name='Arial', size=10, italic=True)
 
 if com_row == 2:
     ws_com.cell(row=2, column=1, value='No comments found').font = Font(name='Arial', size=10, italic=True)
 
-ws_err.freeze_panes = 'A2'
+ws_err.freeze_panes = 'A3'
 ws_com.freeze_panes = 'A2'
 
 
 # ── Build DemOn Upload tab ────────────────────────────────────────────────────
-ws_up = wb.create_sheet('DemOn Upload')
-
 DEMON_COLS = [
     'SCHEME', 'RECORD_TYPE', 'RING_NO', 'SPECIES', 'AGE', 'SEX',
     'PROVISIONAL_SEX', 'SEXING_METHOD', 'CONDITION', 'METAL_MARK_INFO',
@@ -536,17 +532,10 @@ DEMON_COLS = [
     'FINDING_CONDITION', 'FINDING_CIRCUMSTANCES',
     'WARNING_FC_SPECIAL_METHOD', 'WARNING_C_SPECIAL_METHOD',
     'RINGER_INITIALS', 'PROCESSOR_INITIALS',
-    'PULLUS_STAGE', 'PULLI_ALIVE',
+    'PULLUS_STAGE', 'PULLI_ALIVE', 'PULLI_RINGED',
     'WARNING_AGE_CODE', 'WARNING_SEX',
     'SOURCE_ROW',
 ]
-
-for c, h in enumerate(DEMON_COLS, 1):
-    cell = ws_up.cell(row=1, column=c, value=h)
-    fill = FILL_ORANGE_HEADER if h == 'SOURCE_ROW' else FILL_BLUE_HEADER
-    style_header_cell(cell, fill)
-
-ws_up.row_dimensions[1].height = 30
 
 col_widths = {
     'SCHEME': 10, 'RECORD_TYPE': 13, 'RING_NO': 12, 'SPECIES': 10,
@@ -558,14 +547,28 @@ col_widths = {
     'FINDING_CONDITION': 18, 'FINDING_CIRCUMSTANCES': 22,
     'WARNING_FC_SPECIAL_METHOD': 24, 'WARNING_C_SPECIAL_METHOD': 24,
     'RINGER_INITIALS': 15, 'PROCESSOR_INITIALS': 18,
-    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11,
+    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12,
     'WARNING_AGE_CODE': 18, 'WARNING_SEX': 13,
     'SOURCE_ROW': 14,
 }
-for c, h in enumerate(DEMON_COLS, 1):
-    ws_up.column_dimensions[get_column_letter(c)].width = col_widths.get(h, 14)
 
-up_row = 2
+def create_upload_sheet(title):
+    worksheet = wb.create_sheet(title)
+    for c, h in enumerate(DEMON_COLS, 1):
+        cell = worksheet.cell(row=1, column=c, value=h)
+        fill = FILL_ORANGE_HEADER if h == 'SOURCE_ROW' else FILL_BLUE_HEADER
+        style_header_cell(cell, fill)
+        worksheet.column_dimensions[get_column_letter(c)].width = col_widths.get(h, 14)
+    worksheet.row_dimensions[1].height = 30
+    worksheet.freeze_panes = 'A2'
+    return worksheet
+
+
+ws_up = create_upload_sheet('DemOn Upload')
+upload_sheets = [ws_up]
+upload_sheet = ws_up
+upload_sheet_row = 2
+upload_record_count = 0
 
 for i, row in enumerate(data):
     upload_flag = str(row[C_UPLOAD]).strip() if row[C_UPLOAD] else ''
@@ -627,39 +630,35 @@ for i, row in enumerate(data):
         'PROCESSOR_INITIALS':        row[C_INITIALS],
         'PULLUS_STAGE':              pullus_stage,
         'PULLI_ALIVE':               row[C_BROOD],
+        'PULLI_RINGED':              row[C_BROOD],
         'WARNING_AGE_CODE':          '',
         'WARNING_SEX':               '',
         'SOURCE_ROW':                ringing_data_row_num(i),
     }
 
+    if upload_record_count == 500:
+        upload_sheet = create_upload_sheet('DemOn Upload 2')
+        upload_sheets.append(upload_sheet)
+        upload_sheet_row = 2
+
     for c, col_name in enumerate(DEMON_COLS, 1):
         val = record.get(col_name, '')
-        cell = ws_up.cell(row=up_row, column=c, value=val)
+        cell = upload_sheet.cell(row=upload_sheet_row, column=c, value=val)
         style_cell(cell)
 
-    up_row += 1
-
-# Note row
-note_row = up_row + 1
-note = ws_up.cell(row=note_row, column=1,
-    value='NOTE: SOURCE_ROW = row number in "Ringing data" sheet (use to trace records back). '
-          'Delete SOURCE_ROW column before saving as CSV for DemOn upload. '
-          'CAPTURE_METHOD assumes M (mist net) for all non-nestbox/non-pullus records — review Potter trap records manually.')
-note.font = Font(name='Arial', size=9, italic=True, color='666666')
-ws_up.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=12)
-
-ws_up.freeze_panes = 'A2'
+    upload_sheet_row += 1
+    upload_record_count += 1
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 wb.save(OUT)
 print(f'Saved: {OUT}')
-print(f'Upload rows: {up_row - 2}')
-print(f'Error rows: {err_row - 2}')
+print(f'Upload rows: {upload_record_count}')
+print(f'Error rows: {err_row - 3}')
 print(f'Comment rows: {com_row - 2}')
 
-if err_row > 2:
+if err_row > 3:
     print('\nErrors to review:')
-    for error in ws_err.iter_rows(min_row=2, values_only=True):
+    for error in ws_err.iter_rows(min_row=3, values_only=True):
         if error[4]:
             print(
                 f'  row {error[0]}: {error[1]} ({error[2]}) - '
