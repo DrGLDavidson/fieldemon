@@ -62,6 +62,7 @@ C_NESTBOX   = col('nestbox')
 C_FEATHER   = col('featherLength')
 C_BROOD     = col('broodSize')
 C_LETTERID  = header.index('nestlingLetterID') if 'nestlingLetterID' in header else None
+C_BREEDING = col('breedingCondition')
 C_UPLOAD    = col('NEEDS UPLOADING TO DEMON?')
 C_ERRORS    = col('ERRORS FOUND')
 
@@ -328,7 +329,10 @@ def find_ambiguous_nestling_links():
         ringtype = row[C_RINGTYPE]
         nestbox = row[C_NESTBOX]
         letterid = row[C_LETTERID]
+        age = row[C_AGE]
 
+        if age != 1:
+            continue
         if species in SKIP_SPECIES or not ringno or str(ringtype) in SKIP_RINGTYPES:
             continue
         if not nestbox or not letterid:
@@ -358,7 +362,10 @@ def find_nestbox_consistency_issues():
         species = row[C_SPECIES]
         ringtype = row[C_RINGTYPE]
         nestbox = str(row[C_NESTBOX]).strip() if row[C_NESTBOX] else ''
+        age = row[C_AGE]
 
+        if age != 1:
+            continue
         if species in SKIP_SPECIES or str(ringtype) in SKIP_RINGTYPES:
             continue
         if not nestbox or not species:
@@ -489,7 +496,7 @@ for i, row in enumerate(data):
     if comment and str(comment).strip():
         add_comment(i, row, str(comment).strip())
 
-# Check same-year nestbox entries for inconsistent species codes or dates.
+# Check age-1 same-year nestbox entries for inconsistent species codes or dates.
 nestbox_consistency_issues = find_nestbox_consistency_issues()
 for issue in nestbox_consistency_issues.values():
     for record in issue['records']:
@@ -501,7 +508,7 @@ for issue in nestbox_consistency_issues.values():
             issue['details'],
         )
 
-# Ambiguous nestling links need review before linking pre-ringing records.
+# Ambiguous age-1 nestling links need review before linking pre-ringing records.
 ambiguous_nestling_links = find_ambiguous_nestling_links()
 for (nestbox, letterid, year), records in ambiguous_nestling_links.items():
     ring_numbers = sorted(records, key=str)
@@ -532,6 +539,8 @@ DEMON_COLS = [
     'FINDING_CONDITION', 'FINDING_CIRCUMSTANCES',
     'WARNING_FC_SPECIAL_METHOD', 'WARNING_C_SPECIAL_METHOD',
     'RINGER_INITIALS', 'PROCESSOR_INITIALS',
+
+    'PULLUS_STAGE', 'PULLI_ALIVE', 'PULLI_RINGED', 'BREEDING_CONDITION',
     'PULLUS_STAGE', 'PULLI_ALIVE', 'PULLI_RINGED',
     'WARNING_AGE_CODE', 'WARNING_SEX',
     'SOURCE_ROW',
@@ -547,6 +556,7 @@ col_widths = {
     'FINDING_CONDITION': 18, 'FINDING_CIRCUMSTANCES': 22,
     'WARNING_FC_SPECIAL_METHOD': 24, 'WARNING_C_SPECIAL_METHOD': 24,
     'RINGER_INITIALS': 15, 'PROCESSOR_INITIALS': 18,
+    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12, 'BREEDING_CONDITION': 18,
     'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12,
     'WARNING_AGE_CODE': 18, 'WARNING_SEX': 13,
     'SOURCE_ROW': 14,
@@ -631,6 +641,7 @@ for i, row in enumerate(data):
         'PULLUS_STAGE':              pullus_stage,
         'PULLI_ALIVE':               row[C_BROOD],
         'PULLI_RINGED':              row[C_BROOD],
+        'BREEDING_CONDITION':            row[C_BREEDING],
         'WARNING_AGE_CODE':          '',
         'WARNING_SEX':               '',
         'SOURCE_ROW':                ringing_data_row_num(i),
