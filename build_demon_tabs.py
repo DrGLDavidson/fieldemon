@@ -21,9 +21,11 @@ if len(source_workbooks) != 1:
 
 SRC = source_workbooks[0]
 OUTPUT_DIR.mkdir(exist_ok=True)
+RUN_TIMESTAMP = datetime.datetime.now()
 OUT = OUTPUT_DIR / (
-    f"Davidson_group_ringing_data_withDemonTabs_{datetime.datetime.now():%Y-%m-%d-%H-%M-%S}.xlsx"
+    f"Davidson_group_ringing_data_withDemonTabs_{RUN_TIMESTAMP:%Y-%m-%d-%H-%M-%S}.xlsx"
 )
+DATE_REPORTED = RUN_TIMESTAMP.date().isoformat()
 
 wb = load_workbook(SRC)
 
@@ -61,6 +63,7 @@ C_COMMENT   = col('comment')
 C_NESTBOX   = col('nestbox')
 C_FEATHER   = col('featherLength')
 C_BROOD     = col('broodSize')
+C_PULLUS_NOT_RINGED = col('pullusNotRinged')
 C_LETTERID  = header.index('nestlingLetterID') if 'nestlingLetterID' in header else None
 C_UPLOAD    = col('NEEDS UPLOADING TO DEMON?')
 C_ERRORS    = col('ERRORS FOUND')
@@ -271,6 +274,8 @@ err_headers = [
     'Date',
     'Issue type',
     'Details',
+    'date_reported',
+    'date_corrected',
 ]
 
 for c, h in enumerate(err_headers, 1):
@@ -284,6 +289,8 @@ ws_err.column_dimensions['C'].width = 12
 ws_err.column_dimensions['D'].width = 14
 ws_err.column_dimensions['E'].width = 30
 ws_err.column_dimensions['F'].width = 65
+ws_err.column_dimensions['G'].width = 14
+ws_err.column_dimensions['H'].width = 14
 
 error_note = ws_err.cell(
     row=2,
@@ -296,20 +303,22 @@ error_note.font = Font(name='Arial', size=10, bold=True)
 error_note.fill = FILL_WARN_ROW
 error_note.alignment = Alignment(vertical='center', wrap_text=True)
 error_note.border = BORDER
-ws_err.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
+ws_err.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
 ws_err.row_dimensions[2].height = 45
 
 err_row = 3
 
-def add_error(data_idx, row, issue_type, details):
+def add_error(data_idx, row, issue_type, details, ring_no=None):
     global err_row
     vals = [
         ringing_data_row_num(data_idx),
-        row[C_RINGNO],
+        row[C_RINGNO] if ring_no is None else ring_no,
         row[C_SPECIES],
         format_date(row[C_DATE], ringing_data_row_num(data_idx)),
         issue_type,
         details,
+        DATE_REPORTED,
+        '',
     ]
     for c, v in enumerate(vals, 1):
         cell = ws_err.cell(row=err_row, column=c, value=v)
@@ -393,6 +402,76 @@ def find_nestbox_consistency_issues():
         issues[key] = {
             'records': records,
             'details': f'Nestbox {key[0]}, year {key[1]} has ' + '; '.join(details) + '.',
+        }
+
+    return issues
+
+
+def find_nestbox_brood_size_issues():
+    def normalize_brood_size(value):
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            return str(value).strip()
+        return int(numeric_value) if numeric_value.is_integer() else numeric_value
+
+    records_by_key = collections.defaultdict(list)
+    for data_idx, row in enumerate(data):
+        species = row[C_SPECIES]
+        ringtype = row[C_RINGTYPE]
+        nestbox = str(row[C_NESTBOX]).strip() if row[C_NESTBOX] else ''
+
+        if species in SKIP_SPECIES or str(ringtype) in SKIP_RINGTYPES:
+            continue
+        if not nestbox or not species or row[C_AGE] != 1:
+            continue
+
+        row_num = ringing_data_row_num(data_idx)
+        date_text = format_date(row[C_DATE], row_num)
+        if not date_text:
+            continue
+
+        key = (nestbox, int(date_text[:4]))
+        records_by_key[key].append({
+            'data_idx': data_idx,
+            'brood_size': row[C_BROOD],
+        })
+
+    issues = {}
+    for key, records in records_by_key.items():
+        brood_sizes = {
+            normalize_brood_size(record['brood_size'])
+            for record in records
+            if record['brood_size'] is not None
+            and str(record['brood_size']).strip()
+        }
+        has_missing_brood_size = any(
+            record['brood_size'] is None
+            or not str(record['brood_size']).strip()
+            for record in records
+        )
+
+        if len(brood_sizes) == 1 and not has_missing_brood_size:
+            brood_size = next(iter(brood_sizes))
+            if len(records) == brood_size:
+                continue
+            details = (
+                f'Nestbox {key[0]}, year {key[1]} has {len(records)} entries, '
+                f'but broodSize is {brood_size}; number of entries does not equal broodSize.'
+            )
+        else:
+            brood_size_values = ', '.join(
+                sorted((str(value) for value in brood_sizes))
+            ) or 'none'
+            details = (
+                f'Nestbox {key[0]}, year {key[1]} has {len(records)} entries, '
+                f'but broodSize values are missing or inconsistent '
+                f'({brood_size_values}); number of entries cannot be verified.'
+            )
+
+        issues[key] = {
+            'records': records,
+            'details': details,
         }
 
     return issues
@@ -501,6 +580,30 @@ for issue in nestbox_consistency_issues.values():
             issue['details'],
         )
 
+# Check the number of nestling entries against broodSize for each nestbox/year.
+nestbox_brood_size_issues = find_nestbox_brood_size_issues()
+for issue in nestbox_brood_size_issues.values():
+    record = issue['records'][0]
+    data_idx = record['data_idx']
+    ring_numbers = sorted({
+        str(data[entry['data_idx']][C_RINGNO]).strip()
+        for entry in issue['records']
+        if data[entry['data_idx']][C_RINGNO]
+        and str(data[entry['data_idx']][C_RINGNO]).strip()
+    })
+    ring_number_range = ''
+    if ring_numbers:
+        ring_number_range = ring_numbers[0]
+        if len(ring_numbers) > 1:
+            ring_number_range = f'{ring_numbers[0]} - {ring_numbers[-1]}'
+    add_error(
+        data_idx,
+        data[data_idx],
+        'Nestbox brood size mismatch',
+        issue['details'],
+        ring_no=ring_number_range,
+    )
+
 # Ambiguous nestling links need review before linking pre-ringing records.
 ambiguous_nestling_links = find_ambiguous_nestling_links()
 for (nestbox, letterid, year), records in ambiguous_nestling_links.items():
@@ -601,6 +704,13 @@ for i, row in enumerate(data):
 
     visit_date = format_date(row[C_DATE], ringing_data_row_num(i))
     capture_time = format_time(row[C_TIME])
+    brood_size = row[C_BROOD]
+    pullus_not_ringed = row[C_PULLUS_NOT_RINGED]
+    pullus_ringed = (
+        brood_size - (pullus_not_ringed or 0)
+        if brood_size not in (None, '')
+        else ''
+    )
 
     record = {
         'SCHEME':                    'GBT',
@@ -629,8 +739,8 @@ for i, row in enumerate(data):
         'RINGER_INITIALS':           row[C_INITIALS] if ringtype == 'N' else '',
         'PROCESSOR_INITIALS':        row[C_INITIALS],
         'PULLUS_STAGE':              pullus_stage,
-        'PULLI_ALIVE':               row[C_BROOD],
-        'PULLI_RINGED':              row[C_BROOD],
+        'PULLI_ALIVE':               brood_size,
+        'PULLI_RINGED':              pullus_ringed,
         'WARNING_AGE_CODE':          '',
         'WARNING_SEX':               '',
         'SOURCE_ROW':                ringing_data_row_num(i),
