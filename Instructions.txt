@@ -152,6 +152,8 @@ sexingMethod       SEXING_METHOD            Blank if G; otherwise direct
 wing               WING_LENGTH              Direct
 weight             WEIGHT                   Direct
 broodSize          PULLI_ALIVE              Direct (nestbox records only)
+                   PULLI_RINGED             broodSize minus pullusNotRinged
+pullusNotRinged     (used in calculation)   Blank is treated as 0
 featherLength      PULLUS_STAGE             Converted (see below)
 initials           RINGER_INITIALS          Same value used for both
                    PROCESSOR_INITIALS
@@ -305,6 +307,9 @@ Missing [field]              A mandatory DemOn field is blank
 Location code issue          Location not in lookup table, or blank/invalid
 Outdated nestbox code        UW2U detected — verify current DemOn code
 Cannot determine record type ringType could not be mapped to a DemOn type
+Nestbox brood size mismatch
+                             Nestbox/year entry count differs from broodSize,
+                             or broodSize is missing/inconsistent
 Batch size warning           More than 500 records marked Y — split before upload
 
 The 'Ringing data row number' column corresponds exactly to the row number
@@ -354,5 +359,3 @@ KNOWN LIMITATIONS / FUTURE IMPROVEMENTS
    and not part of this script.
 
 5. Potter trap records: cannot be distinguished automatically yet.
-
-
