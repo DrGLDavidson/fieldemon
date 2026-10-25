@@ -415,7 +415,7 @@ def find_nestbox_consistency_issues():
 
 
 def find_nestbox_brood_size_issues():
-    def normalize_brood_size(value):
+    def normalize_count(value):
         try:
             numeric_value = float(value)
         except (TypeError, ValueError):
@@ -442,15 +442,22 @@ def find_nestbox_brood_size_issues():
         records_by_key[key].append({
             'data_idx': data_idx,
             'brood_size': row[C_BROOD],
+            'pullus_not_ringed': row[C_PULLUS_NOT_RINGED],
         })
 
     issues = {}
     for key, records in records_by_key.items():
         brood_sizes = {
-            normalize_brood_size(record['brood_size'])
+            normalize_count(record['brood_size'])
             for record in records
             if record['brood_size'] is not None
             and str(record['brood_size']).strip()
+        }
+        pullus_not_ringed_values = {
+            normalize_count(record['pullus_not_ringed'])
+            for record in records
+            if record['pullus_not_ringed'] is not None
+            and str(record['pullus_not_ringed']).strip()
         }
         has_missing_brood_size = any(
             record['brood_size'] is None
@@ -458,22 +465,54 @@ def find_nestbox_brood_size_issues():
             for record in records
         )
 
-        if len(brood_sizes) == 1 and not has_missing_brood_size:
+        if (
+            len(brood_sizes) == 1
+            and not has_missing_brood_size
+            and len(pullus_not_ringed_values) <= 1
+        ):
             brood_size = next(iter(brood_sizes))
-            if len(records) == brood_size:
-                continue
-            details = (
-                f'Nestbox {key[0]}, year {key[1]} has {len(records)} entries, '
-                f'but broodSize is {brood_size}; number of entries does not equal broodSize.'
+            pullus_not_ringed = (
+                next(iter(pullus_not_ringed_values))
+                if pullus_not_ringed_values
+                else 0
             )
+            if not (
+                isinstance(brood_size, (int, float))
+                and isinstance(pullus_not_ringed, (int, float))
+            ):
+                brood_size_values = ', '.join(
+                    sorted((str(value) for value in brood_sizes))
+                ) or 'none'
+                pullus_not_ringed_values_text = ', '.join(
+                    sorted((str(value) for value in pullus_not_ringed_values))
+                ) or 'none (treated as 0)'
+                details = (
+                    f'Nestbox {key[0]}, year {key[1]} has {len(records)} entries, '
+                    f'but broodSize values are missing or inconsistent '
+                    f'({brood_size_values}) or pullusNotRinged values are inconsistent '
+                    f'({pullus_not_ringed_values_text}); number of entries cannot be verified.'
+                )
+            elif len(records) == brood_size - pullus_not_ringed:
+                continue
+            else:
+                details = (
+                    f'Nestbox {key[0]}, year {key[1]} has {len(records)} entries, '
+                    f'but broodSize is {brood_size} and pullusNotRinged is '
+                    f'{pullus_not_ringed}; expected '
+                    f'{brood_size - pullus_not_ringed} ringed entries.'
+                )
         else:
             brood_size_values = ', '.join(
                 sorted((str(value) for value in brood_sizes))
             ) or 'none'
+            pullus_not_ringed_values_text = ', '.join(
+                sorted((str(value) for value in pullus_not_ringed_values))
+            ) or 'none (treated as 0)'
             details = (
                 f'Nestbox {key[0]}, year {key[1]} has {len(records)} entries, '
                 f'but broodSize values are missing or inconsistent '
-                f'({brood_size_values}); number of entries cannot be verified.'
+                f'({brood_size_values}) or pullusNotRinged values are inconsistent '
+                f'({pullus_not_ringed_values_text}); number of entries cannot be verified.'
             )
 
         issues[key] = {
@@ -588,7 +627,7 @@ for issue in nestbox_consistency_issues.values():
         )
 
 
-# Check the number of nestling entries against broodSize for each nestbox/year.
+# Check the number of ringed nestling entries against broodSize less unringed pulli.
 nestbox_brood_size_issues = find_nestbox_brood_size_issues()
 for issue in nestbox_brood_size_issues.values():
     record = issue['records'][0]

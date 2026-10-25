@@ -308,8 +308,9 @@ Location code issue          Location not in lookup table, or blank/invalid
 Outdated nestbox code        UW2U detected — verify current DemOn code
 Cannot determine record type ringType could not be mapped to a DemOn type
 Nestbox brood size mismatch
-                             Nestbox/year entry count differs from broodSize,
-                             or broodSize is missing/inconsistent
+                             Nestbox/year entry count differs from
+                             broodSize minus pullusNotRinged, or either
+                             value is missing/inconsistent
 Batch size warning           More than 500 records marked Y — split before upload
 
 The 'Ringing data row number' column corresponds exactly to the row number
