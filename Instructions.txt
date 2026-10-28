@@ -182,6 +182,8 @@ earlhamHall             EARL-UEA               A1
 universityWoods         UEA-NESTBOXES          A1
 UEAWoods                UEA-NESTBOXES          A1  (treated as same site)
 charterWoods            Carter Wood            A1
+M_Woods                  MAD-WOODS              A3
+M_Village                MAD-VILLAGE            A6
 
 Nestbox HABITAT_1 exceptions:
   NW8, NW9, NW15  →  C5  (all other nestboxes use their location's habitat)

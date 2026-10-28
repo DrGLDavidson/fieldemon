@@ -38,7 +38,7 @@ ws_data = wb['Ringing data']
 
 # ── Read all data rows ────────────────────────────────────────────────────────
 rows = list(ws_data.iter_rows(values_only=True))
-header = rows[0]
+header = tuple(h.strip() if isinstance(h, str) else h for h in rows[0])
 data = rows[1:]
 
 def col(name):
@@ -65,7 +65,12 @@ C_FEATHER   = col('featherLength')
 C_BROOD     = col('broodSize')
 C_PULLUS_NOT_RINGED = col('pullusNotRinged')
 C_LETTERID  = header.index('nestlingLetterID') if 'nestlingLetterID' in header else None
-C_BREEDING = col('breedingCondition')
+C_BREEDING = header.index('breedingCondition') if 'breedingCondition' in header else None
+_header_lower = [h.lower() if isinstance(h, str) else h for h in header]
+C_SPECIES_RINGSIZE_WARNING = (
+    _header_lower.index('warning_species_ringsize_conflict')
+    if 'warning_species_ringsize_conflict' in _header_lower else None
+)
 C_UPLOAD    = col('NEEDS UPLOADING TO DEMON?')
 C_ERRORS    = col('ERRORS FOUND')
 
@@ -80,6 +85,8 @@ LOCATION_MAP = {
     'universitywoods':      ('UEA-NESTBOXES',      'A1'),
     'ueawoods':             ('UEA-NESTBOXES',      'A1'),
     'charterwoods':         ('Carter Wood',        'A1'),
+    'm_woods':              ('MAD-WOODS',          'A3'),
+    'm_village':            ('MAD-VILLAGE',        'A6'),
 }
 
 SEXING_METHOD_MAP = {
@@ -337,14 +344,15 @@ def find_ambiguous_nestling_links():
         ringno = row[C_RINGNO]
         ringtype = row[C_RINGTYPE]
         nestbox = row[C_NESTBOX]
-        letterid = row[C_LETTERID]
+        letterid = str(row[C_LETTERID]).strip() if row[C_LETTERID] is not None else ''
+        nestbox = str(nestbox).strip() if nestbox else ''
         age = row[C_AGE]
 
         if age != 1:
             continue
         if species in SKIP_SPECIES or not ringno or str(ringtype) in SKIP_RINGTYPES:
             continue
-        if not nestbox or not letterid:
+        if not nestbox or letterid.upper() in ('', 'N/A', 'NA'):
             continue
 
         row_num = ringing_data_row_num(data_idx)
@@ -363,6 +371,71 @@ def find_ambiguous_nestling_links():
         for key, records in records_by_key.items()
         if len(records) > 1
     }
+
+
+def find_ring_conflicts():
+    """Flag ring numbers on nestbox records that clash across nests, species or rows.
+
+    Only rows with a nestbox are considered, so later retraps elsewhere are ignored.
+    Returns {ringNo: {'rows': [data_idx, ...], 'problems': [str, ...]}}.
+    """
+    by_ring = collections.defaultdict(list)
+    for data_idx, row in enumerate(data):
+        ringno = row[C_RINGNO]
+        species = row[C_SPECIES]
+        nestbox = str(row[C_NESTBOX]).strip() if row[C_NESTBOX] else ''
+        if not ringno or not str(ringno).strip() or not nestbox:
+            continue
+        if species in SKIP_SPECIES or str(row[C_RINGTYPE]).strip() in SKIP_RINGTYPES:
+            continue
+        date_text = format_date(row[C_DATE], ringing_data_row_num(data_idx))
+        by_ring[str(ringno).strip()].append({
+            'data_idx': data_idx,
+            'nestbox': nestbox,
+            'species': str(species).strip(),
+            'year': int(date_text[:4]) if date_text else None,
+            'age': row[C_AGE],
+            'ringtype': str(row[C_RINGTYPE]).strip(),
+        })
+
+    def rows_text(records):
+        return ', '.join(str(ringing_data_row_num(r['data_idx'])) for r in records)
+
+    conflicts = {}
+    for ringno, records in by_ring.items():
+        if len(records) < 2:
+            continue
+        problems = []
+
+        species_set = sorted({r['species'] for r in records})
+        if len(species_set) > 1:
+            problems.append(f'used for different species ({", ".join(species_set)})')
+
+        by_year = collections.defaultdict(list)
+        for r in records:
+            by_year[r['year']].append(r)
+        for year, year_records in sorted(by_year.items(), key=lambda kv: str(kv[0])):
+            boxes = sorted({r['nestbox'] for r in year_records})
+            if len(boxes) > 1:
+                problems.append(f'used in different nestboxes in {year} ({", ".join(boxes)})')
+
+        chick_boxes = sorted({r['nestbox'] for r in records if r['age'] == 1})
+        if len(chick_boxes) > 1:
+            problems.append(f'used for age 1 chicks in different nestboxes ({", ".join(chick_boxes)})')
+
+        chicks = [r for r in records if r['age'] == 1]
+        new_rings = [r for r in records if r['ringtype'] == 'N']
+        if len(chicks) > 1:
+            problems.append(f'appears {len(chicks)} times as an age 1 chick (rows {rows_text(chicks)})')
+        elif len(new_rings) > 1:
+            problems.append(f'is marked as newly ringed (ringType N) {len(new_rings)} times (rows {rows_text(new_rings)})')
+
+        if problems:
+            conflicts[ringno] = {
+                'rows': [r['data_idx'] for r in records],
+                'problems': problems,
+            }
+    return conflicts
 
 
 def find_nestbox_consistency_issues():
@@ -656,13 +729,28 @@ for issue in nestbox_brood_size_issues.values():
 ambiguous_nestling_links = find_ambiguous_nestling_links()
 for (nestbox, letterid, year), records in ambiguous_nestling_links.items():
     ring_numbers = sorted(records, key=str)
-    details = (
-        f'Nestbox {nestbox}, letter {letterid}, year {year} is linked to multiple '
-        f'ring numbers: {", ".join(str(ring_no) for ring_no in ring_numbers)}.'
-    )
     for ringno in ring_numbers:
         data_idx = records[ringno]['data_idx']
+        others = [str(r) for r in ring_numbers if r != ringno]
+        details = (
+            f'Nestbox "{nestbox}" + nestlingLetterID "{letterid}" + year {year} '
+            f'match {len(ring_numbers)} different ring numbers (rows '
+            f'{", ".join(str(records[r]["data_idx"] + 2) for r in ring_numbers)}). '
+            f'Each letter should identify one nestling per nestbox per year. '
+            f'This ring also shares it with: {", ".join(others)}. '
+            f'Check nestlingLetterID (or nestbox) on these rows.'
+        )
         add_error(data_idx, data[data_idx], 'Ambiguous nestling link', details)
+
+ring_conflicts = find_ring_conflicts()
+for ringno, conflict in ring_conflicts.items():
+    all_rows = ', '.join(str(ringing_data_row_num(i)) for i in conflict['rows'])
+    details = (
+        f'Ring {ringno} on nestbox records (rows {all_rows}): '
+        + '; '.join(conflict['problems']) + '.'
+    )
+    for data_idx in conflict['rows']:
+        add_error(data_idx, data[data_idx], 'Duplicate ring number', details)
 
 if err_row == 3:
     ws_err.cell(row=3, column=1, value='No errors found').font = Font(name='Arial', size=10, italic=True)
@@ -683,12 +771,12 @@ DEMON_COLS = [
     'FINDING_CONDITION', 'FINDING_CIRCUMSTANCES',
     'WARNING_FC_SPECIAL_METHOD', 'WARNING_C_SPECIAL_METHOD',
     'RINGER_INITIALS', 'PROCESSOR_INITIALS',
-
     'PULLUS_STAGE', 'PULLI_ALIVE', 'PULLI_RINGED', 'BREEDING_CONDITION',
-    'PULLUS_STAGE', 'PULLI_ALIVE', 'PULLI_RINGED',
     'WARNING_AGE_CODE', 'WARNING_SEX',
-    'SOURCE_ROW',
 ]
+if C_SPECIES_RINGSIZE_WARNING is not None:
+    DEMON_COLS.append('WARNING_SPECIES_RINGSIZE_CONFLICT')
+DEMON_COLS.append('SOURCE_ROW')
 
 col_widths = {
     'SCHEME': 10, 'RECORD_TYPE': 13, 'RING_NO': 12, 'SPECIES': 10,
@@ -700,9 +788,9 @@ col_widths = {
     'FINDING_CONDITION': 18, 'FINDING_CIRCUMSTANCES': 22,
     'WARNING_FC_SPECIAL_METHOD': 24, 'WARNING_C_SPECIAL_METHOD': 24,
     'RINGER_INITIALS': 15, 'PROCESSOR_INITIALS': 18,
-    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12, 'BREEDING_CONDITION': 18,
-    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12,
+    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12,         'BREEDING_CONDITION': 18,
     'WARNING_AGE_CODE': 18, 'WARNING_SEX': 13,
+    'WARNING_SPECIES_RINGSIZE_CONFLICT': 34,
     'SOURCE_ROW': 14,
 }
 
@@ -792,9 +880,12 @@ for i, row in enumerate(data):
         'PULLUS_STAGE':              pullus_stage,
         'PULLI_ALIVE':               brood_size,
         'PULLI_RINGED':              pullus_ringed,
-        'BREEDING_CONDITION':            row[C_BREEDING],
+        'BREEDING_CONDITION':            row[C_BREEDING] if C_BREEDING is not None else '',
         'WARNING_AGE_CODE':          '',
         'WARNING_SEX':               '',
+        'WARNING_SPECIES_RINGSIZE_CONFLICT': (
+            row[C_SPECIES_RINGSIZE_WARNING] if C_SPECIES_RINGSIZE_WARNING is not None else ''
+        ),
         'SOURCE_ROW':                ringing_data_row_num(i),
     }
 
