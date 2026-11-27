@@ -246,6 +246,42 @@ def ringing_data_row_num(data_index):
     return data_index + 2
 
 
+def extract_breeding_condition_and_ogc(comment):
+    """Extract BP, CP, and OGC values from comment.
+    
+    Returns tuple: (breeding_condition_value, old_greater_coverts_value)
+    - breeding_condition_value: 'BP1', 'BP(2)', or 'CP' if found, else empty string
+    - old_greater_coverts_value: integer as string if OGC/OGCs/OCG/OCGs found, else empty string
+    """
+    import re
+    
+    if not comment or not str(comment).strip():
+        return '', ''
+    
+    comment_str = str(comment).strip()
+    breeding_condition = ''
+    ogc_value = ''
+    
+    # Extract BP pattern (case-insensitive): BP followed by optional space, optional paren, digit, optional closing paren
+    bp_match = re.search(r'bp\s*\(?\d+\)?', comment_str, re.IGNORECASE)
+    if bp_match:
+        breeding_condition = bp_match.group(0)
+    
+    # Extract CP pattern (case-insensitive): CP standalone
+    if not breeding_condition:
+        cp_match = re.search(r'\bcp\b', comment_str, re.IGNORECASE)
+        if cp_match:
+            breeding_condition = 'CP'
+    
+    # Extract OGC pattern (case-insensitive): digit(s) followed by optional space and OGC/OGCs/OCG/OCGs
+    ogc_match = re.search(r'(\d+)\s*(?:ogcs?|ocgs?)', comment_str, re.IGNORECASE)
+    if ogc_match:
+        ogc_value = ogc_match.group(1)
+    
+    return breeding_condition, ogc_value
+
+
+
 # ── Styles ────────────────────────────────────────────────────────────────────
 FONT_HEADER = Font(name='Arial', bold=True, color='FFFFFF', size=10)
 FONT_NORMAL = Font(name='Arial', size=10)
@@ -772,6 +808,7 @@ DEMON_COLS = [
     'WARNING_FC_SPECIAL_METHOD', 'WARNING_C_SPECIAL_METHOD',
     'RINGER_INITIALS', 'PROCESSOR_INITIALS',
     'PULLUS_STAGE', 'PULLI_ALIVE', 'PULLI_RINGED', 'BREEDING_CONDITION',
+    'OLD_GREATER_COVERTS',
     'WARNING_AGE_CODE', 'WARNING_SEX',
 ]
 if C_SPECIES_RINGSIZE_WARNING is not None:
@@ -788,7 +825,8 @@ col_widths = {
     'FINDING_CONDITION': 18, 'FINDING_CIRCUMSTANCES': 22,
     'WARNING_FC_SPECIAL_METHOD': 24, 'WARNING_C_SPECIAL_METHOD': 24,
     'RINGER_INITIALS': 15, 'PROCESSOR_INITIALS': 18,
-    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12,         'BREEDING_CONDITION': 18,
+    'PULLUS_STAGE': 13, 'PULLI_ALIVE': 11, 'PULLI_RINGED': 12, 'BREEDING_CONDITION': 18,
+    'OLD_GREATER_COVERTS': 18,
     'WARNING_AGE_CODE': 18, 'WARNING_SEX': 13,
     'WARNING_SPECIES_RINGSIZE_CONFLICT': 34,
     'SOURCE_ROW': 14,
@@ -845,6 +883,7 @@ for i, row in enumerate(data):
     capture_time = format_time(row[C_TIME])
     brood_size = row[C_BROOD]
     pullus_not_ringed = row[C_PULLUS_NOT_RINGED]
+    comment = row[C_COMMENT]
     
     # Convert to int safely, treating empty/whitespace as None
     try:
@@ -862,6 +901,9 @@ for i, row in enumerate(data):
         if brood_size_int is not None
         else ''
     )
+
+    # Extract breeding condition and OGC from comment
+    comment_breeding_condition, old_greater_coverts = extract_breeding_condition_and_ogc(comment)
 
     record = {
         'SCHEME':                    'GBT',
@@ -892,7 +934,8 @@ for i, row in enumerate(data):
         'PULLUS_STAGE':              pullus_stage,
         'PULLI_ALIVE':               brood_size,
         'PULLI_RINGED':              pullus_ringed,
-        'BREEDING_CONDITION':            row[C_BREEDING] if C_BREEDING is not None else '',
+        'BREEDING_CONDITION':        comment_breeding_condition or (row[C_BREEDING] if C_BREEDING is not None else ''),
+        'OLD_GREATER_COVERTS':       old_greater_coverts,
         'WARNING_AGE_CODE':          '',
         'WARNING_SEX':               '',
         'WARNING_SPECIES_RINGSIZE_CONFLICT': (
