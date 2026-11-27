@@ -845,9 +845,21 @@ for i, row in enumerate(data):
     capture_time = format_time(row[C_TIME])
     brood_size = row[C_BROOD]
     pullus_not_ringed = row[C_PULLUS_NOT_RINGED]
+    
+    # Convert to int safely, treating empty/whitespace as None
+    try:
+        brood_size_int = int(brood_size) if brood_size not in (None, '') and str(brood_size).strip() else None
+    except (ValueError, TypeError):
+        brood_size_int = None
+    
+    try:
+        pullus_not_ringed_int = int(pullus_not_ringed) if pullus_not_ringed not in (None, '') and str(pullus_not_ringed).strip() else None
+    except (ValueError, TypeError):
+        pullus_not_ringed_int = None
+    
     pullus_ringed = (
-        brood_size - (pullus_not_ringed or 0)
-        if brood_size not in (None, '')
+        brood_size_int - (pullus_not_ringed_int or 0)
+        if brood_size_int is not None
         else ''
     )
 
