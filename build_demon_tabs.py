@@ -250,7 +250,7 @@ def extract_breeding_condition_and_ogc(comment):
     """Extract BP, CP, and OGC values from comment.
     
     Returns tuple: (breeding_condition_value, old_greater_coverts_value)
-    - breeding_condition_value: 'BP1', 'BP(2)', or 'CP' if found, else empty string
+    - breeding_condition_value: integer from BP (e.g. '1', '2'), or 'C' from CP, else empty string
     - old_greater_coverts_value: integer as string if OGC/OGCs/OCG/OCGs found, else empty string
     """
     import re
@@ -262,16 +262,17 @@ def extract_breeding_condition_and_ogc(comment):
     breeding_condition = ''
     ogc_value = ''
     
-    # Extract BP pattern (case-insensitive): BP followed by optional space, optional paren, digit, optional closing paren
-    bp_match = re.search(r'bp\s*\(?\d+\)?', comment_str, re.IGNORECASE)
+    # Extract BP pattern (case-insensitive): BP followed by optional space, optional paren, digit(s), optional closing paren
+    # Return just the integer part
+    bp_match = re.search(r'bp\s*\(?(\d+)\)?', comment_str, re.IGNORECASE)
     if bp_match:
-        breeding_condition = bp_match.group(0)
+        breeding_condition = bp_match.group(1)
     
-    # Extract CP pattern (case-insensitive): CP standalone
+    # Extract CP pattern (case-insensitive): CP standalone, return as 'C'
     if not breeding_condition:
         cp_match = re.search(r'\bcp\b', comment_str, re.IGNORECASE)
         if cp_match:
-            breeding_condition = 'CP'
+            breeding_condition = 'C'
     
     # Extract OGC pattern (case-insensitive): digit(s) followed by optional space and OGC/OGCs/OCG/OCGs
     ogc_match = re.search(r'(\d+)\s*(?:ogcs?|ocgs?)', comment_str, re.IGNORECASE)
